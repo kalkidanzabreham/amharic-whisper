@@ -1,0 +1,29 @@
+model:
+  name: "openai/whisper-small"   # start with small. upgrade to medium if WER is poor
+  language: "amharic"
+  task: "transcribe"
+
+data:
+  train_csv: "data/train.csv"
+  val_csv: "data/val.csv"
+  test_csv: "data/test.csv"
+  audio_column: "audio_path"
+  text_column: "text"
+  sample_rate: 16000
+
+training:
+  output_dir: "./checkpoints/whisper-amharic"
+  batch_size: 8
+  eval_batch_size: 8
+  learning_rate: 1e-5
+  warmup_steps: 500
+  max_steps: 4000             # use steps not epochs for speech — more predictable
+  gradient_checkpointing: true # saves VRAM — critical for Colab
+  fp16: true                  # only if GPU available
+  save_steps: 500
+  eval_steps: 500
+  logging_steps: 25
+  dataloader_num_workers: 2
+
+output:
+  final_model_dir: "./whisper-amharic-final"
