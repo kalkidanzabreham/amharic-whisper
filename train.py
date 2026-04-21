@@ -163,7 +163,7 @@ trainer = Seq2SeqTrainer(
     eval_dataset=val_dataset,
     data_collator=data_collator,
     compute_metrics=partial(compute_metrics, processor=processor),
-    tokenizer=processor,          # ✅ full processor, NOT processor.feature_extractor
+    processing_class=processor,          # ✅ full processor, NOT processor.feature_extractor
 )
 
 
