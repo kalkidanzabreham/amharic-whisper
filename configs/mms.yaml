@@ -1,0 +1,29 @@
+model:
+  name: "facebook/mms-300m"
+  language: "amh"          # Amharic ISO 639-3 code — different from Whisper's format
+  task: "transcribe"
+
+data:
+  train_csv: "/content/drive/MyDrive/amharic-whisper/data/train.csv"
+  val_csv:   "/content/drive/MyDrive/amharic-whisper/data/val.csv"
+  test_csv:  "/content/drive/MyDrive/amharic-whisper/data/test.csv"
+  audio_column: "audio_path"
+  text_column:  "text"
+  sample_rate:  16000
+
+training:
+  output_dir: "/content/"
+  batch_size: 8
+  eval_batch_size: 8
+  learning_rate: 0.0001      # MMS needs higher LR than Whisper
+  warmup_steps: 100
+  max_steps: 2000            # needs fewer steps — already knows Amharic
+  gradient_checkpointing: true
+  fp16: true
+  save_steps: 500
+  eval_steps: 500
+  logging_steps: 25
+  save_total_limit: 2
+
+output:
+  final_model_dir: "/content"

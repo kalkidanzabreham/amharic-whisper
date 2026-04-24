@@ -1,0 +1,28 @@
+model:
+  name: "facebook/wav2vec2-large-xlsr-53"
+  language: "amharic"
+
+data:
+  train_csv: "/content/drive/MyDrive/amharic-whisper/data/train.csv"
+  val_csv:   "/content/drive/MyDrive/amharic-whisper/data/val.csv"
+  test_csv:  "/content/drive/MyDrive/amharic-whisper/data/test.csv"
+  audio_column: "audio_path"
+  text_column:  "text"
+  sample_rate:  16000
+
+training:
+  output_dir: "/content"
+  batch_size: 8
+  eval_batch_size: 8
+  learning_rate: 0.00003
+  warmup_steps: 500
+  max_steps: 4000
+  gradient_checkpointing: true
+  fp16: true
+  save_steps: 500
+  eval_steps: 500
+  logging_steps: 25
+  save_total_limit: 2
+
+output:
+  final_model_dir: "/content"
