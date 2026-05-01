@@ -1,5 +1,9 @@
+# ── Patch peft/transformers 5.0 conflict ──────────────────────────────────────
+import transformers as _transformers
+if not hasattr(_transformers, 'EncoderDecoderCache'):
+    _transformers.EncoderDecoderCache = type('EncoderDecoderCache', (), {})
+
 import yaml
-import json
 import torch
 import numpy as np
 import pandas as pd
@@ -10,7 +14,6 @@ from typing import Dict, List, Union
 
 import evaluate
 from datasets import Dataset, Audio
-from huggingface_hub import hf_hub_download
 from transformers import (
     Wav2Vec2ForCTC,
     Wav2Vec2FeatureExtractor,
@@ -27,47 +30,71 @@ with open("configs/mms.yaml") as f:
 
 MODEL_NAME = cfg["model"]["name"]      # "facebook/mms-1b-fl102"
 LANGUAGE   = cfg["model"]["language"]  # "amh"
-VOCAB_JSON = Path("data/amh_vocab.json")
+FINAL_DIR  = Path(cfg["output"]["final_model_dir"])
+FINAL_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ── Convert .txt vocab → JSON if not already done ─────────────────────────────
-if not VOCAB_JSON.exists():
-    print("Converting MMS vocab format...")
-    txt_path = hf_hub_download(repo_id=MODEL_NAME, filename=f"vocabs/{LANGUAGE}.txt")
-    with open(txt_path, encoding="utf-8") as f:
-        chars = [line.strip().split(" ")[0] for line in f if line.strip()]
-    vocab = {char: i for i, char in enumerate(chars)}
-    for token in ["<pad>", "<unk>"]:
-        if token not in vocab:
-            vocab[token] = len(vocab)
-    with open(VOCAB_JSON, "w", encoding="utf-8") as f:
-        json.dump(vocab, f, ensure_ascii=False, indent=2)
-    print(f"  Saved vocab ({len(vocab)} chars) → {VOCAB_JSON}")
+# ── Load processor the correct way for MMS ────────────────────────────────────
+# We download the adapter's own tokenizer files directly
+# This guarantees token IDs match exactly what the CTC head was trained with
+print(f"Loading MMS processor for '{LANGUAGE}'...")
 
+from huggingface_hub import hf_hub_download
+import json
 
-# ── Load processor ─────────────────────────────────────────────────────────────
-print(f"Loading {MODEL_NAME}...")
+# Download the adapter's tokenizer files
+tokenizer_config = hf_hub_download(
+    repo_id=MODEL_NAME,
+    filename=f"{LANGUAGE}/tokenizer_config.json"
+)
+vocab_file = hf_hub_download(
+    repo_id=MODEL_NAME,
+    filename=f"{LANGUAGE}/vocab.json"
+)
 
+print(f"Adapter tokenizer config: {tokenizer_config}")
+print(f"Adapter vocab file: {vocab_file}")
+
+# Verify vocab content
+with open(vocab_file, encoding="utf-8") as f:
+    vocab = json.load(f)
+print(f"Vocab size: {len(vocab)}")
+print(f"First 5 tokens: {list(vocab.items())[:5]}")
+
+# Load feature extractor from base model
 feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(MODEL_NAME)
+
+# Load tokenizer from adapter's own files — NOT manually built
 tokenizer = Wav2Vec2CTCTokenizer(
-    vocab_file=str(VOCAB_JSON),
+    vocab_file=vocab_file,
     unk_token="<unk>",
     pad_token="<pad>",
-    word_delimiter_token="|",
+    word_delimiter_token=" ",   # MMS uses space, not |
     do_lower_case=False,
 )
+
 processor = Wav2Vec2Processor(
     feature_extractor=feature_extractor,
     tokenizer=tokenizer
 )
-print(f"✅ Processor ready | Vocab size: {tokenizer.vocab_size}")
+
+# Save processor to final dir immediately so it's always in sync with model
+processor.save_pretrained(str(FINAL_DIR))
+print(f"✅ Processor saved to {FINAL_DIR}")
+print(f"   Vocab size: {tokenizer.vocab_size}")
 
 
-# ── Load model + Amharic adapter ───────────────────────────────────────────────
-model = Wav2Vec2ForCTC.from_pretrained(MODEL_NAME, ignore_mismatched_sizes=True)
+# ── Load model + adapter ───────────────────────────────────────────────────────
+print(f"\nLoading {MODEL_NAME}...")
+model = Wav2Vec2ForCTC.from_pretrained(
+    MODEL_NAME,
+    ignore_mismatched_sizes=True,
+    ctc_loss_reduction="mean",
+    pad_token_id=tokenizer.pad_token_id,
+)
 model.load_adapter(LANGUAGE)
 model.freeze_base_model()
-print("✅ Amharic adapter loaded | Base model frozen")
+print(f"✅ Adapter loaded | Base frozen | pad_token_id: {tokenizer.pad_token_id}")
 
 
 # ── Validate data ──────────────────────────────────────────────────────────────
@@ -95,12 +122,16 @@ print(f"Train: {len(train_dataset)} | Val: {len(val_dataset)}")
 # ── Preprocessing ──────────────────────────────────────────────────────────────
 def prepare_dataset(batch, audio_col, text_col):
     audio = batch[audio_col]
+
     batch["input_values"] = processor.feature_extractor(
         audio["array"],
         sampling_rate=audio["sampling_rate"],
     ).input_values[0]
+
     batch["input_length"] = len(batch["input_values"])
-    batch["labels"]       = processor.tokenizer(batch[text_col]).input_ids
+
+    # Tokenize — MMS uses space as word delimiter so no substitution needed
+    batch["labels"] = processor.tokenizer(batch[text_col]).input_ids
     return batch
 
 
@@ -157,6 +188,11 @@ def compute_metrics(pred):
     pred_str  = processor.tokenizer.batch_decode(pred_ids)
     label_str = processor.tokenizer.batch_decode(pred.label_ids, group_tokens=False)
 
+    # Quick sanity print every eval so you can see quality during training
+    if pred_str:
+        print(f"\n  Sample — actual  : {label_str[0][:50]}")
+        print(f"  Sample — predicted: {pred_str[0][:50]}\n")
+
     return {
         "wer": round(wer_metric.compute(
             predictions=[p.strip() for p in pred_str],
@@ -192,6 +228,9 @@ training_args = TrainingArguments(
     greater_is_better=False,
     dataloader_num_workers=2,
     report_to=["tensorboard"],
+    # ✅ These two ensure full model is always saved
+    save_safetensors=True,
+    save_only_model=False,
 )
 
 trainer = Trainer(
@@ -207,6 +246,7 @@ trainer = Trainer(
 print("\nStarting MMS training...")
 trainer.train()
 
-trainer.save_model(cfg["output"]["final_model_dir"])
-processor.save_pretrained(cfg["output"]["final_model_dir"])
-print(f"✅ MMS model saved → {cfg['output']['final_model_dir']}")
+# Save final model — processor already saved to FINAL_DIR above
+# so it's always in sync regardless of training interruptions
+trainer.save_model(str(FINAL_DIR))
+print(f"✅ MMS model saved → {FINAL_DIR}")

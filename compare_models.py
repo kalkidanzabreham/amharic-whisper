@@ -30,11 +30,7 @@ MODELS = {
         "path": "/content/drive/MyDrive/amharic-whisper/mms-amharic-final",
         "task": "automatic-speech-recognition",
     },
-    "Wav2Vec2 XLSR (fine-tuned)": {
-        "type": "pipeline",
-        "path": "/content/drive/MyDrive/amharic-whisper/wav2vec2-amharic-final",
-        "task": "automatic-speech-recognition",
-    },
+    
 }
 
 wer_metric = evaluate.load("wer")
